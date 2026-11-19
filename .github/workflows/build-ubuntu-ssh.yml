@@ -2,53 +2,22 @@ name: Build Ubuntu SSH image
 
 on:
   workflow_dispatch:
-    inputs:
-      release:
-        description: Ubuntu release to build
-        type: choice
-        options:
-          - noble
-          - jammy
-          - resolute
-        default: noble
-      arch:
-        description: Target architecture
-        type: choice
-        options:
-          - amd64
-          - arm64
-        default: amd64
-      ssh_public_key:
-        description: SSH public key for the ubuntu user (falls back to the SSH_PUBLIC_KEY secret)
-        type: string
-        required: false
-      ssh_users:
-        description: |-
-          Optional multi-user list, one "<username> <public key>" per line.
-          A user may appear multiple times to add several keys.
-          Falls back to the SSH_USERS secret.
-        type: string
-        required: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-ubuntu-ssh-${{ inputs.release }}-${{ inputs.arch }}
+  group: build-ubuntu-ssh
   cancel-in-progress: true
 
 jobs:
   build:
-    name: ${{ inputs.release }}-${{ inputs.arch }}
-    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    name: noble-amd64
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     env:
-      INPUT_SSH_PUBLIC_KEY: ${{ inputs.ssh_public_key }}
-      SECRET_SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
-      INPUT_SSH_USERS: ${{ inputs.ssh_users }}
-      SECRET_SSH_USERS: ${{ secrets.SSH_USERS }}
-      RELEASE: ${{ inputs.release }}
+      RELEASE: noble
 
     steps:
       - name: Checkout
@@ -76,49 +45,6 @@ jobs:
 
           echo "::error::Failed to install build dependencies after 5 attempts."
           exit 1
-
-      - name: Prepare SSH users
-        run: |
-          set -euo pipefail
-
-          users="${INPUT_SSH_USERS:-${SECRET_SSH_USERS:-}}"
-
-          if [ -z "${users}" ]; then
-            key="${INPUT_SSH_PUBLIC_KEY:-${SECRET_SSH_PUBLIC_KEY:-}}"
-            if [ -z "${key}" ]; then
-              echo "::error::No SSH key provided. Set SSH_PUBLIC_KEY / SSH_USERS or pass ssh_public_key / ssh_users."
-              exit 1
-            fi
-
-            users="ubuntu ${key}"
-          fi
-
-          install -d -m 0755 .ci
-          printf '%s\n' "${users}" > .ci/ssh-users
-          chmod 0644 .ci/ssh-users
-
-          # Validate every non-empty, non-comment line.
-          while IFS= read -r line || [ -n "${line}" ]; do
-            case "${line}" in
-              ''|\#*) continue ;;
-            esac
-
-            user="${line%% *}"
-            key="${line#* }"
-
-            if [ "${user}" = "${line}" ] || ! printf '%s' "${user}" | grep -Eq '^[a-z_][a-z0-9_-]*$'; then
-              echo "::error::Invalid username in SSH users entry: ${line}"
-              exit 1
-            fi
-
-            case "${key}" in
-              ssh-*|ecdsa-*|sk-*) ;;
-              *)
-                echo "::error::Invalid SSH public key for user ${user}."
-                exit 1
-                ;;
-            esac
-          done < .ci/ssh-users
 
       - name: Build distrobuilder
         run: make
@@ -175,21 +101,24 @@ jobs:
       - name: Write job summary
         run: |
           {
-            echo "## Ubuntu ${RELEASE} (${ARCH}) Incus image"
+            echo "## Ubuntu ${RELEASE} (amd64) Incus image"
             echo
-            echo "Built with the definition \`doc/examples/ubuntu-ssh.yaml\`."
-            echo
-            echo "### Use it"
+            echo "### Import"
             echo
             echo '```bash'
-            echo "# Container image (split)"
             echo "incus image import incus.tar.xz rootfs.squashfs --alias ubuntu-ssh"
-            echo "incus launch ubuntu-ssh mycontainer"
+            echo '```'
             echo
-            echo "# SSH into it"
-            echo "incus list mycontainer"
+            echo "### Launch and inject the container's SSH key"
+            echo
+            echo '```bash'
+            echo "incus launch ubuntu-ssh mycontainer"
+            echo "incus file push --create-dirs --mode 600 --uid 1000 --gid 1000 \\"
+            echo "  ~/.ssh/id_ed25519.pub mycontainer/home/ubuntu/.ssh/authorized_keys"
             echo "ssh ubuntu@<container-ip>"
             echo '```'
+            echo
+            echo "No SSH key is baked into the image; each container gets its own key at creation time."
             echo
             echo "### Files"
             echo
@@ -197,13 +126,11 @@ jobs:
             ls -lh out
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
-        env:
-          ARCH: ${{ inputs.arch }}
 
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
-          name: incus-image-ubuntu-${{ inputs.release }}-${{ inputs.arch }}
+          name: incus-image-ubuntu-noble-amd64
           path: |
             out/*
             doc/examples/ubuntu-ssh.yaml

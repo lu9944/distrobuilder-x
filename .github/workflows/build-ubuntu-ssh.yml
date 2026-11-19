@@ -1,6 +1,9 @@
 name: Build Ubuntu SSH image
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       release:
@@ -11,6 +14,10 @@ on:
           - jammy
           - resolute
         default: noble
+      release_tag:
+        description: 发布 Release 使用的 tag（留空则自动生成，例如 noble-amd64-20261119-214500）
+        type: string
+        required: false
       net_tools:
         description: 网络工具（ping / dig / traceroute / tcpdump / nc / socat / mtr）
         type: boolean
@@ -41,31 +48,55 @@ on:
         required: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: build-ubuntu-ssh-${{ inputs.release }}
+  group: build-ubuntu-ssh-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: ${{ inputs.release }}-amd64
+    name: ${{ github.event.inputs.release || 'noble' }}-amd64
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     env:
-      RELEASE: ${{ inputs.release }}
-      NET_TOOLS: ${{ inputs.net_tools }}
-      EDITOR_TOOLS: ${{ inputs.editor_tools }}
-      SEARCH_TOOLS: ${{ inputs.search_tools }}
-      ARCHIVE_TOOLS: ${{ inputs.archive_tools }}
-      DEV_TOOLS: ${{ inputs.dev_tools }}
-      DEBUG_TOOLS: ${{ inputs.debug_tools }}
-      EXTRA_PACKAGES: ${{ inputs.extra_packages }}
+      RELEASE: ${{ github.event.inputs.release || 'noble' }}
+      NET_TOOLS: ${{ github.event.inputs.net_tools }}
+      EDITOR_TOOLS: ${{ github.event.inputs.editor_tools }}
+      SEARCH_TOOLS: ${{ github.event.inputs.search_tools }}
+      ARCHIVE_TOOLS: ${{ github.event.inputs.archive_tools }}
+      DEV_TOOLS: ${{ github.event.inputs.dev_tools }}
+      DEBUG_TOOLS: ${{ github.event.inputs.debug_tools }}
+      EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: meta
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ github.event.inputs.release_tag }}"
+            if [ -z "${tag}" ]; then
+              tag="${RELEASE}-amd64-$(date -u +%Y%m%d-%H%M%S)"
+            fi
+          fi
+
+          case "${tag}" in
+            ''|*[!A-Za-z0-9._-]*)
+              echo "::error::Invalid release tag: ${tag}"
+              exit 1
+              ;;
+          esac
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "Release tag: ${tag}"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -191,9 +222,49 @@ jobs:
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
-          name: incus-image-ubuntu-${{ inputs.release }}-amd64
+          name: incus-image-ubuntu-${{ env.RELEASE }}-amd64
           path: |
             out/*
             build/ubuntu-ssh.yaml
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          files=(
+            out/incus.tar.xz
+            out/rootfs.squashfs
+            out/SHA256SUMS
+            build/ubuntu-ssh.yaml
+          )
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${files[@]}" --clobber
+          else
+            gh release create "${TAG}" "${files[@]}" \
+              --target "${GITHUB_SHA}" \
+              --title "Ubuntu ${RELEASE} amd64 (${TAG})" \
+              --notes "Ubuntu ${RELEASE} amd64 Incus image.
+
+          Selected components:
+          - network tools: ${NET_TOOLS}
+          - editor tools: ${EDITOR_TOOLS}
+          - text/JSON tools: ${SEARCH_TOOLS}
+          - archive tools: ${ARCHIVE_TOOLS}
+          - dev tools: ${DEV_TOOLS}
+          - debug tools: ${DEBUG_TOOLS}
+
+          No SSH keys are baked into the image. Inject a key when creating the container:
+          incus file push --create-dirs --mode 600 --uid 1000 --gid 1000 key.pub NAME/home/ubuntu/.ssh/authorized_keys"
+          fi
+
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+          echo "### Release" >> "${GITHUB_STEP_SUMMARY}"
+          echo >> "${GITHUB_STEP_SUMMARY}"
+          echo "${url}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Release published: ${url}"

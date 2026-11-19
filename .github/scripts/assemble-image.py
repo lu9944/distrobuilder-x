@@ -64,9 +64,23 @@ PACKAGE_GROUPS = {
 
 PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
 
+# Used when a workflow run has no inputs (for example a tag push).
+DEFAULT_GROUPS = {
+    "NET_TOOLS": True,
+    "EDITOR_TOOLS": True,
+    "SEARCH_TOOLS": True,
+    "ARCHIVE_TOOLS": True,
+    "DEV_TOOLS": False,
+    "DEBUG_TOOLS": False,
+}
+
 
 def env_flag(name):
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+    raw = os.environ.get(name, "").strip().lower()
+    if raw == "":
+        return DEFAULT_GROUPS.get(name, False)
+
+    return raw in ("1", "true", "yes", "on")
 
 
 def main():

@@ -171,10 +171,33 @@ actions:
     chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
     chmod 0600 /home/ubuntu/.ssh/authorized_keys
 
-    # Make sure host keys exist and the configuration is valid.
+    # Validate the sshd configuration (this needs a host key present).
     ssh-keygen -A
     install -d -m 0755 /run/sshd
     sshd -t
+
+    # Don't ship host keys, otherwise every instance would share the same
+    # keys and re-creating a container would trigger host key warnings.
+    rm -f /etc/ssh/ssh_host_*
+
+    cat > /etc/systemd/system/ssh-host-keys.service <<'EOF'
+    [Unit]
+    Description=Generate SSH host keys on first boot
+    DefaultDependencies=no
+    After=local-fs.target
+    Before=sysinit.target ssh.service ssh.socket
+    ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/bin/ssh-keygen -A
+    RemainAfterExit=yes
+
+    [Install]
+    WantedBy=sysinit.target
+    EOF
+
+    systemctl enable ssh-host-keys.service
 
 mappings:
   architecture_map: debian

@@ -131,13 +131,35 @@ jobs:
 
       - name: Build Incus image
         run: |
-          sudo env "PATH=${PATH}" "$(go env GOPATH)/bin/distrobuilder" build-incus \
-            doc/examples/ubuntu-ssh.yaml \
-            "${PWD}/out" \
-            --cache-dir "${RUNNER_TEMP}/distrobuilder" \
-            --keep-sources=false \
-            --timeout 7200 \
-            -o image.release="${RELEASE}"
+          set -uo pipefail
+
+          # The Ubuntu archive occasionally times out or returns 503 while
+          # debootstrap fetches the release files; retry the whole build.
+          ok=0
+          for attempt in 1 2 3; do
+            echo "::group::Build attempt ${attempt}"
+            if sudo env "PATH=${PATH}" "$(go env GOPATH)/bin/distrobuilder" build-incus \
+                 doc/examples/ubuntu-ssh.yaml \
+                 "${PWD}/out" \
+                 --cache-dir "${RUNNER_TEMP}/distrobuilder" \
+                 --keep-sources=false \
+                 --timeout 7200 \
+                 -o image.release="${RELEASE}"; then
+              ok=1
+              echo "::endgroup::"
+              break
+            fi
+
+            echo "::endgroup::"
+            echo "Build attempt ${attempt} failed, retrying in 30s..."
+            rm -rf out
+            sleep 30
+          done
+
+          if [ "${ok}" -ne 1 ]; then
+            echo "::error::Image build failed after 3 attempts."
+            exit 1
+          fi
 
           # distrobuilder runs as root, so hand the output back to the runner
           # user for the checksum and artifact steps.

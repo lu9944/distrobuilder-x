@@ -32,7 +32,7 @@ files:
 # Container networking: DHCP on eth0, provided by the Incus bridge.
 - path: /etc/netplan/10-lxc.yaml
   generator: dump
-  mode: 0600
+  mode: "0600"
   content: |-
     network:
       version: 2
@@ -44,7 +44,7 @@ files:
 # Passwordless sudo for every user in the sudo group.
 - path: /etc/sudoers.d/90-passwordless-sudo
   generator: dump
-  mode: 0440
+  mode: "0440"
   content: |-
     # Managed by distrobuilder.
     %sudo ALL=(ALL) NOPASSWD:ALL
@@ -52,7 +52,7 @@ files:
 # Restrict SSH to key authentication.
 - path: /etc/ssh/sshd_config.d/99-distrobuilder.conf
   generator: dump
-  mode: 0644
+  mode: "0644"
   content: |-
     # Managed by distrobuilder.
     PubkeyAuthentication yes
@@ -67,47 +67,18 @@ packages:
   cleanup: true
   sets:
   - packages:
-    # Shell and editing
+    # Core packages; optional groups are added by the build workflow.
     - bash-completion
-    - less
-    - nano
-    - tmux
-    - vim
-    # Common regex/text/JSON tooling
-    - gawk
-    - jq
-    - ripgrep
-    # Networking
-    - bind9-dnsutils
-    - curl
-    - iproute2
-    - iputils-ping
-    - mtr-tiny
-    - net-tools
-    - netcat-openbsd
-    - rsync
-    - socat
-    - tcpdump
-    - traceroute
-    - wget
-    # Misc utilities
-    - bzip2
     - ca-certificates
+    - curl
     - file
-    - htop
     - locales
-    - lsof
-    - psmisc
-    - tree
-    - unzip
-    - xz-utils
-    - zip
-    - zstd
-    # Remote access and privilege escalation
     - openssh-server
+    - psmisc
+    - rsync
     - sudo
-    # DNS resolution and network configuration
     - systemd-resolved
+    - wget
     action: install
 
 actions:

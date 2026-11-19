@@ -6,3 +6,5 @@ doc/html/
 .sphinx/warnings.txt
 .sphinx/.wordlist.dic
 .sphinx/_static/download
+build/
+out/

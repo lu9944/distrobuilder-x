@@ -2,22 +2,66 @@ name: Build Ubuntu SSH image
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Ubuntu 版本
+        type: choice
+        options:
+          - noble
+          - jammy
+          - resolute
+        default: noble
+      net_tools:
+        description: 网络工具（ping / dig / traceroute / tcpdump / nc / socat / mtr）
+        type: boolean
+        default: true
+      editor_tools:
+        description: 编辑与终端工具（vim / nano / tmux / htop / less）
+        type: boolean
+        default: true
+      search_tools:
+        description: 文本与 JSON 工具（ripgrep / jq / gawk / tree）
+        type: boolean
+        default: true
+      archive_tools:
+        description: 压缩与解压工具（xz / zstd / zip / unzip / bzip2）
+        type: boolean
+        default: true
+      dev_tools:
+        description: 开发工具（git / gcc / make / python3 / pip / gdb）
+        type: boolean
+        default: false
+      debug_tools:
+        description: 系统诊断工具（lsof / strace / sysstat / iotop）
+        type: boolean
+        default: false
+      extra_packages:
+        description: 额外 apt 包（逗号或空格分隔，可留空）
+        type: string
+        required: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-ubuntu-ssh
+  group: build-ubuntu-ssh-${{ inputs.release }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: noble-amd64
+    name: ${{ inputs.release }}-amd64
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     env:
-      RELEASE: noble
+      RELEASE: ${{ inputs.release }}
+      NET_TOOLS: ${{ inputs.net_tools }}
+      EDITOR_TOOLS: ${{ inputs.editor_tools }}
+      SEARCH_TOOLS: ${{ inputs.search_tools }}
+      ARCHIVE_TOOLS: ${{ inputs.archive_tools }}
+      DEV_TOOLS: ${{ inputs.dev_tools }}
+      DEBUG_TOOLS: ${{ inputs.debug_tools }}
+      EXTRA_PACKAGES: ${{ inputs.extra_packages }}
 
     steps:
       - name: Checkout
@@ -35,7 +79,8 @@ jobs:
           # Ubuntu archive mirrors occasionally return 503; retry a few times.
           for attempt in 1 2 3 4 5; do
             if sudo apt-get -o Acquire::Retries=5 update &&
-               sudo apt-get -o Acquire::Retries=5 install -y debootstrap gpg rsync squashfs-tools; then
+               sudo apt-get -o Acquire::Retries=5 install -y \
+                 debootstrap gpg python3-yaml rsync squashfs-tools; then
               exit 0
             fi
 
@@ -46,14 +91,19 @@ jobs:
           echo "::error::Failed to install build dependencies after 5 attempts."
           exit 1
 
+      - name: Assemble image definition
+        run: |
+          mkdir -p build
+          python3 .github/scripts/assemble-image.py \
+            doc/examples/ubuntu-ssh.yaml build/ubuntu-ssh.yaml
+
       - name: Build distrobuilder
         run: make
 
       - name: Validate definition
         run: |
           sudo env "PATH=${PATH}" "$(go env GOPATH)/bin/distrobuilder" validate \
-            doc/examples/ubuntu-ssh.yaml \
-            -o image.release="${RELEASE}"
+            build/ubuntu-ssh.yaml
 
       - name: Build Incus image
         run: |
@@ -65,12 +115,11 @@ jobs:
           for attempt in 1 2 3; do
             echo "::group::Build attempt ${attempt}"
             if sudo env "PATH=${PATH}" "$(go env GOPATH)/bin/distrobuilder" build-incus \
-                 doc/examples/ubuntu-ssh.yaml \
+                 build/ubuntu-ssh.yaml \
                  "${PWD}/out" \
                  --cache-dir "${RUNNER_TEMP}/distrobuilder" \
                  --keep-sources=false \
-                 --timeout 7200 \
-                 -o image.release="${RELEASE}"; then
+                 --timeout 7200; then
               ok=1
               echo "::endgroup::"
               break
@@ -103,13 +152,25 @@ jobs:
           {
             echo "## Ubuntu ${RELEASE} (amd64) Incus image"
             echo
-            echo "### Import"
+            echo "### 已选组件"
+            echo
+            echo "| 组件 | 是否安装 |"
+            echo "| --- | --- |"
+            echo "| 网络工具 | ${NET_TOOLS} |"
+            echo "| 编辑与终端工具 | ${EDITOR_TOOLS} |"
+            echo "| 文本与 JSON 工具 | ${SEARCH_TOOLS} |"
+            echo "| 压缩与解压工具 | ${ARCHIVE_TOOLS} |"
+            echo "| 开发工具 | ${DEV_TOOLS} |"
+            echo "| 系统诊断工具 | ${DEBUG_TOOLS} |"
+            echo "| 额外包 | ${EXTRA_PACKAGES:-（无）} |"
+            echo
+            echo "### 导入"
             echo
             echo '```bash'
             echo "incus image import incus.tar.xz rootfs.squashfs --alias ubuntu-ssh"
             echo '```'
             echo
-            echo "### Launch and inject the container's SSH key"
+            echo "### 创建容器并注入该容器的 SSH 公钥"
             echo
             echo '```bash'
             echo "incus launch ubuntu-ssh mycontainer"
@@ -118,9 +179,9 @@ jobs:
             echo "ssh ubuntu@<container-ip>"
             echo '```'
             echo
-            echo "No SSH key is baked into the image; each container gets its own key at creation time."
+            echo "镜像中不含任何 SSH 公钥，每个容器在创建时注入自己的密钥。"
             echo
-            echo "### Files"
+            echo "### 产物"
             echo
             echo '```'
             ls -lh out
@@ -130,9 +191,9 @@ jobs:
       - name: Upload image
         uses: actions/upload-artifact@v4
         with:
-          name: incus-image-ubuntu-noble-amd64
+          name: incus-image-ubuntu-${{ inputs.release }}-amd64
           path: |
             out/*
-            doc/examples/ubuntu-ssh.yaml
+            build/ubuntu-ssh.yaml
           if-no-files-found: error
           retention-days: 30

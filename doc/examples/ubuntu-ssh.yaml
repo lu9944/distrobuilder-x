@@ -98,6 +98,7 @@ packages:
     - traceroute
     - wget
     # Misc utilities
+    - bzip2
     - ca-certificates
     - file
     - htop
@@ -106,6 +107,9 @@ packages:
     - psmisc
     - tree
     - unzip
+    - xz-utils
+    - zip
+    - zstd
     # Remote access and privilege escalation
     - openssh-server
     - sudo

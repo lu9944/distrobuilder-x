@@ -111,7 +111,7 @@ jobs:
           for attempt in 1 2 3 4 5; do
             if sudo apt-get -o Acquire::Retries=5 update &&
                sudo apt-get -o Acquire::Retries=5 install -y \
-                 debootstrap gpg python3-yaml rsync squashfs-tools; then
+                 debootstrap gpg python3-yaml rsync squashfs-tools zip; then
               exit 0
             fi
 
@@ -178,6 +178,41 @@ jobs:
           sha256sum ./* > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Create release bundle
+        run: |
+          set -euo pipefail
+
+          bundle="${RUNNER_TEMP}/bundle"
+          rm -rf "${bundle}"
+          mkdir -p "${bundle}"
+
+          cp out/incus.tar.xz out/rootfs.squashfs out/SHA256SUMS "${bundle}/"
+          cp build/ubuntu-ssh.yaml "${bundle}/ubuntu-ssh.yaml"
+
+          cat > "${bundle}/README.txt" <<EOF
+          Ubuntu ${RELEASE} amd64 Incus image
+
+          Files:
+            incus.tar.xz       Image metadata
+            rootfs.squashfs    Root filesystem
+            SHA256SUMS         Checksums
+            ubuntu-ssh.yaml    Definition used for this build
+
+          Import:
+            incus image import incus.tar.xz rootfs.squashfs --alias ubuntu-ssh
+
+          Launch and inject the container's SSH key:
+            incus launch ubuntu-ssh mycontainer
+            incus file push --create-dirs --mode 600 --uid 1000 --gid 1000 \\
+              ~/.ssh/id_ed25519.pub mycontainer/home/ubuntu/.ssh/authorized_keys
+            ssh ubuntu@<container-ip>
+
+          No SSH key is baked into the image.
+          EOF
+
+          (cd "${bundle}" && zip -1 -r -q "${GITHUB_WORKSPACE}/out/ubuntu-ssh-${RELEASE}-amd64.zip" .)
+          ls -lh "out/ubuntu-ssh-${RELEASE}-amd64.zip"
+
       - name: Write job summary
         run: |
           {
@@ -212,6 +247,10 @@ jobs:
             echo
             echo "镜像中不含任何 SSH 公钥，每个容器在创建时注入自己的密钥。"
             echo
+            echo "### 一键下载"
+            echo
+            echo "\`ubuntu-ssh-${RELEASE}-amd64.zip\`（包含下面全部文件）"
+            echo
             echo "### 产物"
             echo
             echo '```'
@@ -237,6 +276,7 @@ jobs:
           set -euo pipefail
 
           files=(
+            "out/ubuntu-ssh-${RELEASE}-amd64.zip"
             out/incus.tar.xz
             out/rootfs.squashfs
             out/SHA256SUMS
@@ -260,7 +300,9 @@ jobs:
           - debug tools: ${DEBUG_TOOLS}
 
           No SSH keys are baked into the image. Inject a key when creating the container:
-          incus file push --create-dirs --mode 600 --uid 1000 --gid 1000 key.pub NAME/home/ubuntu/.ssh/authorized_keys"
+          incus file push --create-dirs --mode 600 --uid 1000 --gid 1000 key.pub NAME/home/ubuntu/.ssh/authorized_keys
+
+          Single download: ubuntu-ssh-${RELEASE}-amd64.zip"
           fi
 
           url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

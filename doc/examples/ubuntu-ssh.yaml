@@ -1,0 +1,176 @@
+image:
+  name: ubuntu-{{ image.release }}-{{ image.architecture_mapped }}-ssh
+  distribution: ubuntu
+  release: noble
+  description: Ubuntu {{ image.release }} with OpenSSH server, common networking tools and passwordless sudo
+  expiry: 365d
+
+source:
+  downloader: debootstrap
+  same_as: gutsy
+  url: http://archive.ubuntu.com/ubuntu
+  components:
+  - main
+  - restricted
+  - universe
+  - multiverse
+
+files:
+- path: /etc/hostname
+  generator: hostname
+
+- path: /etc/hosts
+  generator: hosts
+
+- path: /etc/machine-id
+  generator: dump
+  content: uninitialized
+
+- path: /var/lib/dbus/machine-id
+  generator: remove
+
+# Container networking: DHCP on eth0, provided by the Incus bridge.
+- path: /etc/netplan/10-lxc.yaml
+  generator: dump
+  mode: 0600
+  content: |-
+    network:
+      version: 2
+      ethernets:
+        eth0:
+          dhcp4: true
+          dhcp-identifier: mac
+
+# SSH key for the default user. The workflow generates this file from the
+# SSH_PUBLIC_KEY secret or the ssh_public_key workflow input.
+- path: /home/ubuntu/.ssh/authorized_keys
+  generator: copy
+  source: .ci/authorized_keys
+  mode: 0600
+
+# Passwordless sudo for the default user.
+- path: /etc/sudoers.d/90-ubuntu-passwordless
+  generator: dump
+  mode: 0440
+  content: |-
+    # Managed by distrobuilder.
+    ubuntu ALL=(ALL) NOPASSWD:ALL
+
+# Restrict SSH to key authentication.
+- path: /etc/ssh/sshd_config.d/99-distrobuilder.conf
+  generator: dump
+  mode: 0644
+  content: |-
+    # Managed by distrobuilder.
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitRootLogin prohibit-password
+    UsePAM yes
+
+packages:
+  manager: apt
+  update: true
+  cleanup: true
+  sets:
+  - packages:
+    # Shell and editing
+    - bash-completion
+    - less
+    - nano
+    - tmux
+    - vim
+    # Common regex/text/JSON tooling
+    - gawk
+    - jq
+    - ripgrep
+    # Networking
+    - bind9-dnsutils
+    - curl
+    - iproute2
+    - iputils-ping
+    - mtr-tiny
+    - net-tools
+    - netcat-openbsd
+    - rsync
+    - socat
+    - tcpdump
+    - traceroute
+    - wget
+    # Misc utilities
+    - ca-certificates
+    - file
+    - htop
+    - locales
+    - lsof
+    - psmisc
+    - tree
+    - unzip
+    # Remote access and privilege escalation
+    - openssh-server
+    - sudo
+    # DNS resolution and network configuration
+    - systemd-resolved
+    action: install
+
+actions:
+- trigger: post-update
+  action: |-
+    #!/bin/sh
+    set -eux
+
+    # Create the default user with passwordless sudo.
+    getent group sudo >/dev/null 2>&1 || groupadd --system sudo
+    if ! getent passwd ubuntu >/dev/null 2>&1; then
+      useradd --create-home --shell /bin/bash --groups sudo --user-group ubuntu
+    fi
+
+- trigger: post-packages
+  action: |-
+    #!/bin/sh
+    set -eux
+
+    # Networking and DNS.
+    systemctl enable systemd-networkd
+    systemctl enable systemd-resolved
+
+    # SSH (Ubuntu 24.04+ uses socket activation).
+    systemctl enable ssh.service || true
+    systemctl enable ssh.socket || true
+    ssh-keygen -A
+
+    # Use the systemd-resolved stub resolver inside Incus containers.
+    umount -l /etc/resolv.conf || true
+    rm -f /etc/resolv.conf
+    ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+
+    # Locale.
+    locale-gen en_US.UTF-8
+    update-locale LANG=en_US.UTF-8
+
+    # Cleanup underlying /run.
+    mount -o bind / /mnt
+    rm -rf /mnt/run/*
+    umount /mnt
+
+    # Cleanup temporary shadow paths.
+    rm -f /etc/*-
+
+- trigger: post-files
+  action: |-
+    #!/bin/sh
+    set -eux
+
+    # The copy generator creates the parent directory as root.
+    install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
+    touch /home/ubuntu/.ssh/authorized_keys
+    chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+    chmod 0600 /home/ubuntu/.ssh/authorized_keys
+
+    # Make sure host keys exist and the configuration is valid.
+    ssh-keygen -A
+    install -d -m 0755 /run/sshd
+    sshd -t
+
+mappings:
+  architecture_map: debian

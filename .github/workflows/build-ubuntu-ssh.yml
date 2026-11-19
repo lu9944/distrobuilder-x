@@ -109,6 +109,11 @@ jobs:
             --timeout 7200 \
             -o image.release="${RELEASE}"
 
+          # distrobuilder runs as root, so hand the output back to the runner
+          # user for the checksum and artifact steps.
+          sudo chown -R "$(id -u):$(id -g)" "${PWD}/out"
+          ls -lh out
+
       - name: Generate checksums
         run: |
           cd out

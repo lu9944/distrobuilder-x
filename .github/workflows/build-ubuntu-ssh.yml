@@ -22,6 +22,13 @@ on:
         description: SSH public key for the ubuntu user (falls back to the SSH_PUBLIC_KEY secret)
         type: string
         required: false
+      ssh_users:
+        description: |-
+          Optional multi-user list, one "<username> <public key>" per line.
+          A user may appear multiple times to add several keys.
+          Falls back to the SSH_USERS secret.
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -39,6 +46,8 @@ jobs:
     env:
       INPUT_SSH_PUBLIC_KEY: ${{ inputs.ssh_public_key }}
       SECRET_SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+      INPUT_SSH_USERS: ${{ inputs.ssh_users }}
+      SECRET_SSH_USERS: ${{ secrets.SSH_USERS }}
       RELEASE: ${{ inputs.release }}
 
     steps:
@@ -68,27 +77,48 @@ jobs:
           echo "::error::Failed to install build dependencies after 5 attempts."
           exit 1
 
-      - name: Prepare authorized_keys
+      - name: Prepare SSH users
         run: |
           set -euo pipefail
 
-          key="${INPUT_SSH_PUBLIC_KEY:-${SECRET_SSH_PUBLIC_KEY:-}}"
-          if [ -z "${key}" ]; then
-            echo "::error::No SSH public key provided. Set the SSH_PUBLIC_KEY repository secret or pass the ssh_public_key input."
-            exit 1
+          users="${INPUT_SSH_USERS:-${SECRET_SSH_USERS:-}}"
+
+          if [ -z "${users}" ]; then
+            key="${INPUT_SSH_PUBLIC_KEY:-${SECRET_SSH_PUBLIC_KEY:-}}"
+            if [ -z "${key}" ]; then
+              echo "::error::No SSH key provided. Set SSH_PUBLIC_KEY / SSH_USERS or pass ssh_public_key / ssh_users."
+              exit 1
+            fi
+
+            users="ubuntu ${key}"
           fi
 
-          case "${key}" in
-            ssh-*|ecdsa-*|sk-*) ;;
-            *)
-              echo "::error::The provided value does not look like an SSH public key."
-              exit 1
-              ;;
-          esac
-
           install -d -m 0755 .ci
-          printf '%s\n' "${key}" > .ci/authorized_keys
-          chmod 0644 .ci/authorized_keys
+          printf '%s\n' "${users}" > .ci/ssh-users
+          chmod 0644 .ci/ssh-users
+
+          # Validate every non-empty, non-comment line.
+          while IFS= read -r line || [ -n "${line}" ]; do
+            case "${line}" in
+              ''|\#*) continue ;;
+            esac
+
+            user="${line%% *}"
+            key="${line#* }"
+
+            if [ "${user}" = "${line}" ] || ! printf '%s' "${user}" | grep -Eq '^[a-z_][a-z0-9_-]*$'; then
+              echo "::error::Invalid username in SSH users entry: ${line}"
+              exit 1
+            fi
+
+            case "${key}" in
+              ssh-*|ecdsa-*|sk-*) ;;
+              *)
+                echo "::error::Invalid SSH public key for user ${user}."
+                exit 1
+                ;;
+            esac
+          done < .ci/ssh-users
 
       - name: Build distrobuilder
         run: make
